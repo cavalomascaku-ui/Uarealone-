@@ -153,7 +153,12 @@
         xpCanvas.width = 512; xpCanvas.height = 256;
         const xCtx = xpCanvas.getContext('2d');
         
+        let xpState = 'question'; // question, answer
+
         function drawXPWindow() {
+            // Clear
+            xCtx.clearRect(0, 0, 512, 256);
+
             // Sombra
             xCtx.fillStyle = 'rgba(0,0,0,0.3)';
             xCtx.fillRect(10, 10, 492, 236);
@@ -172,7 +177,7 @@
             xCtx.font = 'bold 18px Arial';
             xCtx.fillStyle = '#ffffff';
             xCtx.textAlign = 'left';
-            xCtx.fillText('Alerta de Segurança', 10, 22);
+            xCtx.fillText('GovXXX.br', 10, 22);
 
             // Botão Fechar
             xCtx.fillStyle = '#e81123';
@@ -186,22 +191,26 @@
             xCtx.fillStyle = '#000000';
             xCtx.textAlign = 'center';
             
-            xCtx.font = 'bold 22px Tahoma';
-            xCtx.fillText('ACESSO NÃO AUTORIZADO', 251, 80);
+            if (xpState === 'question') {
+                xCtx.font = 'bold 22px Tahoma';
+                xCtx.fillText('Você está sozinho?', 251, 100);
 
-            xCtx.font = '18px Tahoma';
-            xCtx.fillText(`IP: ${userData.ip}`, 251, 120);
-            xCtx.fillText(`Local: ${userData.city}, ${userData.region}`, 251, 150);
+                // Sim Button
+                xCtx.fillStyle = '#ffffff'; xCtx.strokeStyle = '#000'; xCtx.lineWidth = 1;
+                xCtx.fillRect(150, 160, 80, 30); xCtx.strokeRect(150, 160, 80, 30);
+                xCtx.fillStyle = '#000'; xCtx.font = '16px Tahoma'; xCtx.fillText('Sim', 190, 180);
+
+                // Não Button
+                xCtx.fillStyle = '#ffffff'; xCtx.strokeStyle = '#000';
+                xCtx.fillRect(270, 160, 80, 30); xCtx.strokeRect(270, 160, 80, 30);
+                xCtx.fillStyle = '#000'; xCtx.fillText('Não', 310, 180);
+            } else {
+                xCtx.font = 'bold 30px Tahoma';
+                xCtx.fillStyle = '#ff0000';
+                xCtx.fillText('MENTIRA.', 251, 140);
+            }
             
-            // Botão OK
-            xCtx.fillStyle = '#ffffff';
-            xCtx.strokeStyle = '#000';
-            xCtx.lineWidth = 1;
-            xCtx.fillRect(200, 190, 100, 30);
-            xCtx.strokeRect(200, 190, 100, 30);
-            xCtx.fillStyle = '#000';
-            xCtx.font = '16px Tahoma';
-            xCtx.fillText('OK', 250, 210);
+            xpTexture.needsUpdate = true;
         }
 
         const xpTexture = new THREE.CanvasTexture(xpCanvas);
@@ -286,13 +295,37 @@
             const dir = vector.sub(camera.position).normalize();
             fTarget.position.copy(camera.position).add(dir.multiplyScalar(10));
 
-            if (isClick && phase === 'desktop') {
+            if (isClick) {
                 raycaster.setFromCamera(mouse, camera);
-                const intersects = raycaster.intersectObject(iconMesh);
-                if (intersects.length > 0) {
-                    phase = 'app';
-                    drawApp();
-                    appMesh.visible = true;
+
+                // Check XP Popup Interaction
+                if (xpPopupMesh.visible && xpState === 'question') {
+                    const xpIntersects = raycaster.intersectObject(xpPopupMesh);
+                    if (xpIntersects.length > 0) {
+                        const uv = xpIntersects[0].uv;
+                        // Texture mirrored: u = 1 - uv.x
+                        const cx = (1 - uv.x) * 512;
+                        const cy = (1 - uv.y) * 256;
+                        
+                        // Sim: 150,160,80,30 | Não: 270,160,80,30
+                        const hitSim = cx >= 150 && cx <= 230 && cy >= 160 && cy <= 190;
+                        const hitNao = cx >= 270 && cx <= 350 && cy >= 160 && cy <= 190;
+                        
+                        if (hitSim || hitNao) {
+                            xpState = 'answer';
+                            drawXPWindow();
+                        }
+                        return; // Stop propagation if clicked popup
+                    }
+                }
+
+                if (phase === 'desktop') {
+                    const intersects = raycaster.intersectObject(iconMesh);
+                    if (intersects.length > 0) {
+                        phase = 'app';
+                        drawApp();
+                        appMesh.visible = true;
+                    }
                 }
             }
         }
