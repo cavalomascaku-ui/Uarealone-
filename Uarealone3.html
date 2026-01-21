@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Uarealone - High Definition</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; touch-action: none; }
+        
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; display: flex; justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+        #start-btn {
+            padding: 25px 50px; font-size: 20px; color: #ffffff;
+            background: #000; border: 2px solid #ffffff;
+            cursor: pointer; letter-spacing: 3px; text-transform: uppercase;
+            transition: background 0.3s, color 0.3s;
+        }
+        #start-btn:hover {
+            background: #ffffff; color: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <button id="start-btn">ENTRAR NO QUARTO</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        let phase = 'off'; // off, boot, desktop, app
+        let userData = { ip: "Localizando...", city: "---", region: "---" };
+        let popupScale = 0;
+        let targetPopupScale = 0;
+
+        // --- FETCH IP ---
+        async function fetchIP(retry = 0) {
+            try {
+                const res = await fetch('https://ipinfo.io/json?token=');
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                userData = { ip: data.ip, city: data.city, region: data.region };
+            } catch (e) {
+                if (retry < 5) setTimeout(() => fetchIP(retry + 1), 1000 * Math.pow(2, retry));
+            }
+        }
+
+        // --- RENDERER SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 50);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        camera.position.set(-0.38, 9.56, 7.147);
+        camera.lookAt(-0.46, 9.30, 8.045);
+        const baseRotation = camera.rotation.clone();
+
+        const flashlight = new THREE.SpotLight(0xffffff, 25);
+        flashlight.angle = 0.4; flashlight.penumbra = 0.5; flashlight.decay = 1.8; flashlight.distance = 35;
+        flashlight.castShadow = true;
+        scene.add(flashlight);
+        const fTarget = new THREE.Object3D();
+        scene.add(fTarget);
+        flashlight.target = fTarget;
+
+        // --- VIDEO & MONITOR ---
+        const video = document.createElement('video');
+        video.src = "https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/mp4s/Windows%20XP%20Bootscreen%20-%20Jonah%20Miran%20ALT%20(1080p%2C%20h264%2C%20youtube).mp4";
+        video.crossOrigin = "anonymous"; 
+        video.playsInline = true; 
+        video.volume = 0.8;
+        video.preload = "auto";
+        video.loop = false; // Garante que não repita
+
+        const videoTex = new THREE.VideoTexture(video);
+        videoTex.colorSpace = THREE.SRGBColorSpace;
+        videoTex.wrapS = THREE.RepeatWrapping; 
+        videoTex.repeat.x = -1; 
+        videoTex.offset.x = 1;
+        videoTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        videoTex.minFilter = THREE.LinearFilter;
+        videoTex.magFilter = THREE.LinearFilter;
+
+        const monitorMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            new THREE.MeshBasicMaterial({ map: videoTex, side: THREE.DoubleSide })
+        );
+        monitorMesh.position.set(-0.403, 9.409, 8.117);
+        monitorMesh.scale.set(0.653, 0.317, 1);
+        scene.add(monitorMesh);
+
+        // --- ICON ---
+        const iconTex = new THREE.TextureLoader().load('https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/1769025398217.jpg');
+        iconTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        const iconMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            new THREE.MeshBasicMaterial({ map: iconTex, transparent: true, side: THREE.DoubleSide })
+        );
+        iconMesh.position.set(-0.093, 9.42, 8.125); 
+        iconMesh.scale.set(0.017, 0.017, 1);
+        iconMesh.visible = false;
+        scene.add(iconMesh);
+
+        // --- APP POPUP CANVAS ---
+        const appCanvas = document.createElement('canvas');
+        appCanvas.width = 1024; appCanvas.height = 512;
+        const aCtx = appCanvas.getContext('2d');
+        const appTexture = new THREE.CanvasTexture(appCanvas);
+        appTexture.wrapS = THREE.RepeatWrapping; appTexture.repeat.x = -1; appTexture.offset.x = 1;
+        appTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+        function drawApp() {
+            aCtx.fillStyle = '#000000'; aCtx.fillRect(0, 0, 1024, 512);
+            aCtx.strokeStyle = '#ffffff'; aCtx.lineWidth = 10; aCtx.strokeRect(20, 20, 984, 472);
+            aCtx.fillStyle = '#ffffff'; aCtx.textAlign = 'center';
+            aCtx.font = 'bold 70px Courier New'; aCtx.fillText('Você esta sozinho?', 512, 160);
+            aCtx.font = '40px Courier New'; aCtx.fillStyle = '#aaaaaa';
+            aCtx.fillText(`IDENTIDADE: ${userData.ip}`, 512, 280);
+            aCtx.fillText(`LOCALIZACAO: ${userData.city}, ${userData.region}`, 512, 340);
+            aCtx.font = 'italic 30px Courier New'; aCtx.fillStyle = '#ff0000';
+            aCtx.fillText('O SISTEMA CONHECE VOCE.', 512, 440);
+            appTexture.needsUpdate = true;
+        }
+
+        const appMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            new THREE.MeshBasicMaterial({ map: appTexture, transparent: true, visible: false })
+        );
+        appMesh.position.set(-0.403, 9.409, 8.125);
+        appMesh.scale.set(0.5, 0.25, 1);
+        scene.add(appMesh);
+
+        // --- XP POPUP (SYSTEM ALERT) ---
+        const xpCanvas = document.createElement('canvas');
+        xpCanvas.width = 512; xpCanvas.height = 256;
+        const xCtx = xpCanvas.getContext('2d');
+        
+        function drawXPWindow() {
+            // Sombra
+            xCtx.fillStyle = 'rgba(0,0,0,0.3)';
+            xCtx.fillRect(10, 10, 492, 236);
+            
+            // Borda Azul (Header)
+            xCtx.fillStyle = '#0055ea';
+            xCtx.beginPath();
+            xCtx.roundRect(0, 0, 502, 246, [8, 8, 0, 0]);
+            xCtx.fill();
+            
+            // Corpo Cinza
+            xCtx.fillStyle = '#ece9d8';
+            xCtx.fillRect(4, 30, 494, 212);
+
+            // Header Text
+            xCtx.font = 'bold 18px Arial';
+            xCtx.fillStyle = '#ffffff';
+            xCtx.textAlign = 'left';
+            xCtx.fillText('Alerta de Segurança', 10, 22);
+
+            // Botão Fechar
+            xCtx.fillStyle = '#e81123';
+            xCtx.fillRect(465, 5, 30, 20);
+            xCtx.fillStyle = '#fff';
+            xCtx.font = 'bold 16px Arial';
+            xCtx.textAlign = 'center';
+            xCtx.fillText('X', 480, 21);
+
+            // Conteúdo
+            xCtx.fillStyle = '#000000';
+            xCtx.textAlign = 'center';
+            
+            xCtx.font = 'bold 22px Tahoma';
+            xCtx.fillText('ACESSO NÃO AUTORIZADO', 251, 80);
+
+            xCtx.font = '18px Tahoma';
+            xCtx.fillText(`IP: ${userData.ip}`, 251, 120);
+            xCtx.fillText(`Local: ${userData.city}, ${userData.region}`, 251, 150);
+            
+            // Botão OK
+            xCtx.fillStyle = '#ffffff';
+            xCtx.strokeStyle = '#000';
+            xCtx.lineWidth = 1;
+            xCtx.fillRect(200, 190, 100, 30);
+            xCtx.strokeRect(200, 190, 100, 30);
+            xCtx.fillStyle = '#000';
+            xCtx.font = '16px Tahoma';
+            xCtx.fillText('OK', 250, 210);
+        }
+
+        const xpTexture = new THREE.CanvasTexture(xpCanvas);
+        xpTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        // Fix Mirroring
+        xpTexture.wrapS = THREE.RepeatWrapping;
+        xpTexture.repeat.x = -1;
+        xpTexture.offset.x = 1;
+        
+        const xpPopupMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 0.5),
+            new THREE.MeshBasicMaterial({ map: xpTexture, transparent: true, side: THREE.DoubleSide })
+        );
+        // User defined coordinates
+        xpPopupMesh.position.set(-0.4, 9.432, 8);
+        xpPopupMesh.rotation.set(0, 0, 0);
+        xpPopupMesh.scale.set(0, 0, 0); // Start invisible (scale 0)
+        xpPopupMesh.visible = false;
+        scene.add(xpPopupMesh);
+
+        // --- RELÓGIO ---
+        const clockCanvas = document.createElement('canvas');
+        clockCanvas.width = 256; clockCanvas.height = 128;
+        const cCtx = clockCanvas.getContext('2d');
+        const clockTexture = new THREE.CanvasTexture(clockCanvas);
+        function updateClock() {
+            const time = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            cCtx.fillStyle = 'black'; cCtx.fillRect(0,0,256,128);
+            cCtx.fillStyle = '#ff0000'; cCtx.font = 'bold 50px Courier New'; cCtx.textAlign = 'center'; cCtx.textBaseline = 'middle';
+            cCtx.fillText(time, 128, 64);
+            clockTexture.needsUpdate = true;
+        }
+        const clockGroup = new THREE.Group();
+        const clockBody = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 0.15), new THREE.MeshPhongMaterial({ color: 0x111111 }));
+        const clockVisor = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.45, 0.2), 
+            new THREE.MeshStandardMaterial({ 
+                map: clockTexture, 
+                emissiveMap: clockTexture, 
+                emissive: 0xff0000, 
+                emissiveIntensity: 1.5 
+            })
+        );
+        clockVisor.position.z = 0.08;
+        clockGroup.add(clockBody, clockVisor);
+        clockGroup.position.set(-1.46, 8.899, 8.665); 
+        clockGroup.rotation.y = 2.71; 
+        clockGroup.scale.set(0.69, 0.69, 0.69);
+        scene.add(clockGroup);
+
+        // --- CARREGAR MODELO DO QUARTO ---
+        const loader = new GLTFLoader();
+        loader.load('https://cavalomascaku-ui.github.io/mymodels/models/projeto_final_v11.glb', (gltf) => {
+            const model = gltf.scene;
+            model.traverse(n => {
+                if(n.isMesh) {
+                    n.castShadow = true; n.receiveShadow = true;
+                    if(n.material && n.name !== "Plane.002_1") {
+                        n.material = new THREE.MeshPhongMaterial({ map: n.material.map, shininess: 0, emissive: 0x000000 });
+                    }
+                }
+                if(n.isLight) n.visible = false;
+            });
+            scene.add(model);
+        });
+
+        // --- INTERAÇÃO ---
+        let yaw = 0, targetYaw = 0, isDragging = false, prevX = 0;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        function handlePointer(x, y, isClick = false) {
+            if (isDragging && !isClick) {
+                targetYaw -= (x - prevX) * 0.004;
+                targetYaw = Math.max(-1.3, Math.min(1.3, targetYaw));
+                prevX = x;
+            }
+            mouse.x = (x / window.innerWidth) * 2 - 1;
+            mouse.y = -(y / window.innerHeight) * 2 + 1;
+            
+            const vector = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
+            const dir = vector.sub(camera.position).normalize();
+            fTarget.position.copy(camera.position).add(dir.multiplyScalar(10));
+
+            if (isClick && phase === 'desktop') {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(iconMesh);
+                if (intersects.length > 0) {
+                    phase = 'app';
+                    drawApp();
+                    appMesh.visible = true;
+                }
+            }
+        }
+
+        window.addEventListener('mousedown', e => { isDragging = true; prevX = e.clientX; });
+        window.addEventListener('mousemove', e => handlePointer(e.clientX, e.clientY));
+        window.addEventListener('mouseup', e => { isDragging = false; handlePointer(e.clientX, e.clientY, true); });
+        
+        window.addEventListener('touchstart', e => { isDragging = true; prevX = e.touches[0].clientX; });
+        window.addEventListener('touchmove', e => handlePointer(e.touches[0].clientX, e.touches[0].clientY), {passive: false});
+        window.addEventListener('touchend', e => { isDragging = false; const t = e.changedTouches[0]; handlePointer(t.clientX, t.clientY, true); });
+
+        // --- START ---
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('overlay').style.display = 'none';
+            fetchIP();
+            phase = 'boot';
+            video.play();
+            if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
+        });
+
+        video.onended = () => {
+            phase = 'desktop';
+            iconMesh.visible = true;
+            video.pause(); // Congela no último frame
+            
+            // 10s delay para o popup
+            setTimeout(() => {
+                drawXPWindow();
+                xpTexture.needsUpdate = true;
+                xpPopupMesh.visible = true;
+                targetPopupScale = 0.37; // User defined scale
+            }, 10000);
+        };
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateClock();
+            
+            // Camera
+            yaw = THREE.MathUtils.lerp(yaw, targetYaw, 0.1);
+            camera.rotation.copy(baseRotation);
+            camera.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), yaw);
+            flashlight.position.copy(camera.position);
+            
+            // Popup Animation
+            if(xpPopupMesh.visible) {
+                popupScale = THREE.MathUtils.lerp(popupScale, targetPopupScale, 0.1);
+                xpPopupMesh.scale.set(popupScale, popupScale, popupScale);
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
+
