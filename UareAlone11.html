@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Uarealone - Low Battery</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap');
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; touch-action: none; }
+        
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 1000;
+        }
+        #intro-video {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; z-index: 0;
+        }
+        #start-btn {
+            position: absolute;
+            top: 56%; 
+            left: 16%;
+            transform: translateX(-50%);
+            width: 155px; height: 40px;
+            background: transparent; border: none; color: transparent;
+            cursor: pointer; z-index: 10;
+        }
+        
+        #drink-msg {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ffffff; font-family: 'Orbitron', sans-serif; font-size: 40px; font-weight: bold;
+            text-shadow: 0 0 20px #ffffff; opacity: 0; transition: opacity 1s; pointer-events: none;
+            z-index: 2000; letter-spacing: 3px;
+        }
+
+        /* JOYSTICK */
+        #joystick-zone {
+            position: fixed; bottom: 50px; left: 50px; width: 120px; height: 120px;
+            background: rgba(255, 255, 255, 0.1); border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%; touch-action: none; z-index: 3000; display: none;
+        }
+        #joystick-knob {
+            position: absolute; top: 50%; left: 50%; width: 50px; height: 50px;
+            background: rgba(255, 255, 255, 0.5); border-radius: 50%;
+            transform: translate(-50%, -50%); pointer-events: none;
+        }
+        @media (hover: none) and (pointer: coarse) {
+            body.game-running #joystick-zone { display: block; }
+        }
+
+
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <video id="intro-video" autoplay loop muted playsinline>
+            <source src="https://cavalomascaku-ui.github.io/Uarealone-/imagens/lv_0_20260123023223.mp4" type="video/mp4">
+        </video>
+        <button id="start-btn">START</button>
+    </div>
+
+
+    <div id="drink-msg">VOCÊ BEBEU ÁGUA</div>
+    <div id="joystick-zone">
+        <div id="joystick-knob"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        let phase = 'off';
+        let userData = { ip: "Localizando...", city: "---", region: "---" };
+        let popupScale = 0;
+        let targetPopupScale = 0;
+        let collidables = [];
+        let canInteract = false;
+
+        // --- AUDIO SETUP ---
+        const bgm = new Audio('https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/Sinister%20(2012)%20Portrait%20of%20Mr.%20Boogie%20(Soundtrack%20OST)%20-%20sinisterost2%20(youtube).mp3');
+        bgm.loop = true;
+        bgm.volume = 0.2; // Volume baixo como solicitado
+
+        const stepSound = new Audio('https://cavalomascaku-ui.github.io/Uarealone-/passos-de-salto-70753.mp3');
+        stepSound.loop = true;
+        stepSound.volume = 0.8;
+
+        const drinkSound = new Audio('https://cavalomascaku-ui.github.io/Uarealone-/drinking-water-sound-effect-247452.mp3');
+        drinkSound.volume = 1.0;
+
+        // --- BOTTLE VARS ---
+        let bottleMesh = null;
+        let bottleState = 'idle';
+        let bottleTimer = 0;
+        const bottleOriginalPos = new THREE.Vector3(-18.081, 7.298, 39.268);
+        const bottleOriginalRot = new THREE.Euler(0.04, 0, 0);
+
+        // --- FETCH IP ---
+        async function fetchIP(retry = 0) {
+            try {
+                const res = await fetch('https://ipinfo.io/json?token=');
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                userData = { ip: data.ip, city: data.city, region: data.region };
+            } catch (e) {
+                if (retry < 5) setTimeout(() => fetchIP(retry + 1), 1000 * Math.pow(2, retry));
+            }
+        }
+
+        // --- RENDERER SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.BasicShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        camera.position.set(-24.2397, 9.56, 28.4994);
+        camera.rotation.set(-2.8305, 0.4364, 3.0065);
+        const baseRotation = camera.rotation.clone();
+
+        // --- LANTERNA "PILHA FRACA" (INFINITA) ---
+        // Cor levemente amarelada (0xfff0aa) para simular pilha velha
+        // Intensidade bem baixa (0.5), Decay 0 para alcance infinito
+        const flashlight = new THREE.SpotLight(0xfff0aa, 0.5);
+        flashlight.angle = 0.35; 
+        flashlight.penumbra = 0.6; // Bordas bem suaves para parecer luz cansada
+        flashlight.decay = 0; 
+        flashlight.distance = 0; // Infinito
+        flashlight.castShadow = true;
+        scene.add(flashlight);
+        
+        const fTarget = new THREE.Object3D();
+        scene.add(fTarget);
+        flashlight.target = fTarget;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.001);
+        scene.add(ambientLight);
+
+        // --- VIDEO & MONITOR ---
+        const video = document.createElement('video');
+        video.src = "https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/mp4s/Windows%20XP%20Bootscreen%20-%20Jonah%20Miran%20ALT%20(1080p%2C%20h264%2C%20youtube).mp4";
+        video.crossOrigin = "anonymous"; 
+        video.playsInline = true; 
+        video.volume = 0.8;
+        video.preload = "auto";
+        video.loop = false;
+
+        const videoTex = new THREE.VideoTexture(video);
+        videoTex.colorSpace = THREE.SRGBColorSpace;
+        videoTex.minFilter = THREE.LinearFilter;
+        videoTex.magFilter = THREE.LinearFilter;
+        videoTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        
+        // Mantendo correção de espelhamento
+        videoTex.repeat.set(-1, 1);
+        videoTex.offset.set(1, 0);
+        
+        const monitorMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            new THREE.MeshBasicMaterial({ map: videoTex, side: THREE.DoubleSide })
+        );
+        monitorMesh.position.set(-23.563, 8.504, 38.003);
+        monitorMesh.scale.set(4.372, 2.312, 1.0);
+        monitorMesh.rotation.set(0, 0.016, 0);
+        scene.add(monitorMesh);
+
+        // --- XP POPUP CANVAS ---
+        const xpCanvas = document.createElement('canvas');
+        xpCanvas.width = 1024; xpCanvas.height = 512;
+        const xCtx = xpCanvas.getContext('2d');
+        const xpTexture = new THREE.CanvasTexture(xpCanvas);
+        xpTexture.repeat.set(-1, 1);
+        xpTexture.offset.set(1, 0);
+        xpTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        
+        const questions = ["Você está seguro?", "Quem está aí?", "Eles observam."];
+        let currentQuestionIndex = 0;
+        let isGlitching = false;
+
+        function drawXPWindow() {
+            xCtx.clearRect(0, 0, 1024, 512);
+            if (isGlitching) {
+                xCtx.fillStyle = '#0a0000'; xCtx.fillRect(0,0,1024,512);
+                xCtx.fillStyle = '#ff0000'; xCtx.font = 'bold 60px Courier'; xCtx.textAlign = 'center';
+                xCtx.fillText('EU ESTOU AQUI', 512, 256);
+            } else {
+                xCtx.fillStyle = '#0055ea'; xCtx.fillRect(0,0,1024,60);
+                xCtx.fillStyle = '#ece9d8'; xCtx.fillRect(0,60,1024,452);
+                xCtx.fillStyle = '#000'; xCtx.font = 'bold 40px Arial'; xCtx.textAlign = 'center';
+                xCtx.fillText(questions[currentQuestionIndex], 512, 220);
+                
+                xCtx.fillStyle = '#ddd'; 
+                xCtx.fillRect(300, 340, 160, 60); 
+                xCtx.fillRect(560, 340, 160, 60);
+                
+                xCtx.fillStyle = '#000'; 
+                xCtx.font = 'bold 30px Arial';
+                xCtx.fillText('Sim', 380, 380); 
+                xCtx.fillText('Não', 640, 380);
+            }
+            xpTexture.needsUpdate = true;
+        }
+
+        const xpPopupMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 0.5),
+            new THREE.MeshBasicMaterial({ map: xpTexture, transparent: true, side: THREE.DoubleSide })
+        );
+        xpPopupMesh.position.set(-23.707, 8.730, 37.733);
+        xpPopupMesh.scale.set(0, 0, 0);
+        xpPopupMesh.visible = false;
+        scene.add(xpPopupMesh);
+
+        // --- CARREGAMENTO DO MODELO ---
+        const loader = new GLTFLoader();
+        loader.load('https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/Models3d/mapa_projeto_v15 (7)-compressed.glb', (gltf) => {
+            const model = gltf.scene;
+            model.traverse(n => {
+                if(n.isMesh) {
+                    n.castShadow = true; n.receiveShadow = true;
+                    n.material = new THREE.MeshPhongMaterial({ 
+                        map: n.material.map, 
+                        shininess: 1, // Pouquíssimo brilho
+                        emissive: 0x000000,
+                        color: 0x777777 // Ajustado para ser revelado pela luz fraca
+                    });
+                }
+            });
+            collidables.push(model);
+            scene.add(model);
+        });
+
+        loader.load('https://raw.githubusercontent.com/cavalomascaku-ui/Uarealone-/main/water_bottle.glb', (gltf) => {
+            bottleMesh = gltf.scene;
+            bottleMesh.position.copy(bottleOriginalPos);
+            bottleMesh.scale.set(0.51, 0.51, 0.51);
+            scene.add(bottleMesh);
+        });
+
+        // --- INPUT E MOVIMENTO ---
+        let yaw = 0, targetYaw = 0, isDragging = false, prevX = 0;
+        const clock = new THREE.Clock();
+        const keys = { w: false, a: false, s: false, d: false };
+        const moveState = { fwd: 0, strafe: 0 };
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+        let joyTouchId = null;
+
+        function handlePointer(x, y, isClick = false, isTouch = false, touchId = null) {
+            if (isClick && !canInteract) return;
+            if (isTouch && touchId === joyTouchId) return;
+
+            if (isDragging && !isClick) {
+                if (bottleState === 'idle') targetYaw -= (x - prevX) * 0.004;
+                prevX = x;
+            }
+
+            mouse.x = (x / window.innerWidth) * 2 - 1;
+            mouse.y = -(y / window.innerHeight) * 2 + 1;
+            
+            const vector = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
+            const dir = vector.sub(camera.position).normalize();
+            fTarget.position.copy(camera.position).add(dir.multiplyScalar(20));
+
+            if (isClick) {
+                raycaster.setFromCamera(mouse, camera);
+                if (bottleMesh && bottleState === 'idle' && raycaster.intersectObject(bottleMesh, true).length > 0) {
+                    bottleState = 'toMouth'; return;
+                }
+                if (xpPopupMesh.visible && !isGlitching && raycaster.intersectObject(xpPopupMesh).length > 0) {
+                    currentQuestionIndex = (currentQuestionIndex + 1) % questions.length;
+                    if (currentQuestionIndex === 0) isGlitching = true;
+                    drawXPWindow();
+                }
+            }
+        }
+
+        window.addEventListener('mousedown', e => { 
+            if(e.target.closest('#joystick-zone')) return;
+            isDragging = true; prevX = e.clientX; 
+        });
+        window.addEventListener('mousemove', e => handlePointer(e.clientX, e.clientY));
+        window.addEventListener('mouseup', e => { isDragging = false; handlePointer(e.clientX, e.clientY, true); });
+        
+        window.addEventListener('touchstart', e => {
+            const touch = e.changedTouches[0];
+            if(e.target.closest('#joystick-zone')) return;
+            isDragging = true; prevX = touch.clientX; 
+        });
+        window.addEventListener('touchmove', e => {
+            for(let t of e.changedTouches) handlePointer(t.clientX, t.clientY, false, true, t.identifier);
+        });
+        window.addEventListener('touchend', e => { 
+            isDragging = false; 
+            for(let t of e.changedTouches) handlePointer(t.clientX, t.clientY, true, true, t.identifier);
+        });
+
+        window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+        // JOYSTICK
+        const joyZone = document.getElementById('joystick-zone');
+        const joyKnob = document.getElementById('joystick-knob');
+        joyZone.addEventListener('touchstart', e => { joyTouchId = e.changedTouches[0].identifier; });
+        joyZone.addEventListener('touchmove', e => {
+            e.preventDefault();
+            const touch = Array.from(e.touches).find(t => t.identifier === joyTouchId);
+            if(!touch) return;
+            const rect = joyZone.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2; const cy = rect.top + rect.height / 2;
+            let dx = touch.clientX - cx; let dy = touch.clientY - cy;
+            const dist = Math.min(Math.sqrt(dx*dx + dy*dy), 40);
+            const ang = Math.atan2(dy, dx);
+            dx = Math.cos(ang) * dist; dy = Math.sin(ang) * dist;
+            joyKnob.style.transform = `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
+            moveState.strafe = dx / 40; moveState.fwd = -dy / 40;
+        }, {passive: false});
+        joyZone.addEventListener('touchend', () => {
+            joyKnob.style.transform = `translate(-50%, -50%)`;
+            moveState.fwd = 0; moveState.strafe = 0; joyTouchId = null;
+        });
+
+        // --- ANIMATE ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+
+            const fInput = moveState.fwd || (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
+            const sInput = moveState.strafe || (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+            if (fInput !== 0 || sInput !== 0) {
+                const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+                const rig = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+                camera.position.addScaledVector(dir, fInput * 8.0 * dt);
+                camera.position.addScaledVector(rig, sInput * 8.0 * dt);
+                
+                if(stepSound.paused) stepSound.play().catch(()=>{});
+            } else {
+                if(!stepSound.paused) stepSound.pause();
+            }
+
+            yaw = THREE.MathUtils.lerp(yaw, targetYaw, 0.1);
+            camera.rotation.copy(baseRotation);
+            camera.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), yaw);
+            flashlight.position.copy(camera.position);
+
+            // EFEITO PILHA FRACA: Flicker aleatório e intenso
+            // A intensidade oscila entre 0.3 e 0.6 para parecer que vai apagar
+            flashlight.intensity = 0.35 + Math.random() * 0.25;
+            if(Math.random() > 0.98) flashlight.intensity = 0.05; // Pequeno "apagão" rápido
+
+            if(xpPopupMesh.visible) {
+                popupScale = THREE.MathUtils.lerp(popupScale, targetPopupScale, 0.1);
+                xpPopupMesh.scale.set(popupScale, popupScale, popupScale);
+            }
+
+            // Garrafa de Água
+            if (bottleMesh && bottleState !== 'idle') {
+                if (bottleState === 'toMouth') {
+                    const off = new THREE.Vector3(0.5, -0.6, -2.5).applyEuler(camera.rotation);
+                    const target = camera.position.clone().add(off);
+                    bottleMesh.position.lerp(target, 0.1);
+                    if (bottleMesh.position.distanceTo(target) < 0.2) {
+                        bottleState = 'drinking'; bottleTimer = Date.now();
+                        document.getElementById('drink-msg').style.opacity = 1;
+                        drinkSound.play().catch(()=>{});
+                    }
+                } else if (bottleState === 'drinking' && Date.now() - bottleTimer > 2500) {
+                    bottleState = 'returning'; 
+                    document.getElementById('drink-msg').style.opacity = 0;
+                    drinkSound.pause();
+                    drinkSound.currentTime = 0;
+                } else if (bottleState === 'returning') {
+                    bottleMesh.position.lerp(bottleOriginalPos, 0.1);
+                    if (bottleMesh.position.distanceTo(bottleOriginalPos) < 0.1) bottleState = 'idle';
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            // Solicitar Fullscreen
+            const docEl = document.documentElement;
+            if (docEl.requestFullscreen) docEl.requestFullscreen().catch(() => {});
+            else if (docEl.webkitRequestFullscreen) docEl.webkitRequestFullscreen();
+
+            document.body.classList.add('game-running'); // Ativa o joystick via CSS
+            document.getElementById('overlay').style.display = 'none';
+            fetchIP(); phase = 'boot'; 
+            video.play(); 
+            bgm.play().catch(e => console.log('Audio play failed:', e));
+            animate();
+            setTimeout(() => { canInteract = true; }, 500);
+        });
+
+        video.onended = () => {
+            setTimeout(() => { drawXPWindow(); xpPopupMesh.visible = true; targetPopupScale = 2.5; }, 8000);
+        };
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+
+</body>
+</html>
